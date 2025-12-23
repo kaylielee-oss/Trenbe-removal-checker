@@ -1,3 +1,6 @@
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 def check_by_search(driver, url):
     try:
         # 1. URL에서 상품 코드 추출
