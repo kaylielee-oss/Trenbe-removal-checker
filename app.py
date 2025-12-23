@@ -1,111 +1,80 @@
-import streamlit as st
 import pandas as pd
-import time
-import random
 import re
+import time
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
-# --- [정밀 로직] 타임아웃 방어 및 재시도 ---
-def check_trenbe_with_retry(url, driver, idx):
+# 1. 셀레니움 설정 (브라우저 창을 띄우지 않는 headless 모드)
+chrome_options = Options()
+# chrome_options.add_argument("--headless") 
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+
+def check_status(url):
     try:
-        match = re.search(r'\d+', str(url))
-        if not match: return "Invalid URL"
-        product_id = match.group()
+        # URL에서 상품 코드 추출 (숫자 부분)
+        product_code = re.findall(r'\d+', url)[0]
         
-        # 사람처럼 랜덤하게 쉬기 (요청 간격 불규칙화)
-        time.sleep(random.uniform(3.0, 5.0))
+        # 방법 A: 상품 상세 페이지 접속 후 버튼 상태 확인
+        driver.get(url)
+        time.sleep(2) # 페이지 로딩 대기
         
-        search_url = f"https://www.trenbe.com/search?keyword={product_id}"
+        try:
+            # '바로 구매하기' 버튼 텍스트 확인
+            # 트렌비는 품절 시 버튼 내부에 '품절' 텍스트가 포함되거나 클래스명이 변경됨
+            buy_button = driver.find_element(By.XPATH, "//button[contains(text(), '구매하기')]")
+            if "품절" in buy_button.text:
+                return "Expired"
+        except:
+            pass # 버튼을 못 찾은 경우 검색 페이지로 2차 검증
+
+        # 방법 B: 검색 결과 페이지 확인 (제공해주신 1, 3번 이미지 로직)
+        search_url = f"https://www.trenbe.com/search/?keyword={product_code}"
         driver.get(search_url)
+        time.sleep(2)
+
+        page_source = driver.page_source
         
-        # [핵심] 타임아웃 발생 시 'Expired' 대신 에러를 던져 브라우저 재시작 유도
-        wait = WebDriverWait(driver, 15) # 대기 시간을 15초로 늘림
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "main")))
-        
-        # 1. '결과 없음' 문구 우선 확인
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        if any(kw in page_text for kw in ["검색 결과가 없습니다", "결과가 없습니다", "검색 결과 0"]):
+        # "해당 상품이 없습니다" 문구가 있거나 보라색 상자 아이콘(특정 클래스)이 있는 경우
+        if "해당 상품이 없습니다" in page_source:
             return "Expired"
+        
+        # 상품 리스트가 존재하고, 검색한 상품 코드가 결과에 보이면 Active
+        # (3번째 사진처럼 상품이 하나라도 뜨면 Active로 간주)
+        product_list = driver.find_elements(By.CSS_SELECTOR, "div[class*='ProductItem']") # 실제 클래스명 확인 필요
+        if len(product_list) > 0:
+            return "Active"
+        
+        return "Expired" # 기본값
 
-        # 2. 메인 컨테이너 내 상품 ID 정밀 대조
-        main_content = driver.find_element(By.TAG_NAME, "main")
-        items = main_content.find_elements(By.CSS_SELECTOR, "a[href*='/product/']")
-        
-        found = any(f"/product/{product_id}" in (item.get_attribute('href') or "") for item in items)
-        
-        return "Active" if found else "Expired"
-        
     except Exception as e:
-        # 타임아웃 등 에러 발생 시 로그 반환
-        return f"Error: {type(e).__name__}"
+        print(f"Error checking {url}: {e}")
+        return "Error"
 
-def get_driver():
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    # 봇 감지 우회 핵심 설정
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+# 2. CSV 파일 불러오기 및 처리
+input_file = 'products.csv'  # 파일 경로를 수정하세요
+df = pd.read_csv(input_file)
 
-    import os
-    if os.path.exists("/usr/bin/chromium"):
-        options.binary_location = "/usr/bin/chromium"
-        service = Service("/usr/bin/chromedriver")
-    else:
-        service = Service(ChromeDriverManager().install())
-        
-    driver = webdriver.Chrome(service=service, options=options)
-    
-    # [핵심 스크립트] 웹드라이버 속성을 제거하여 봇 감지를 회피함
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    return driver
+# C열(url) 데이터를 읽어서 처리 (인덱스로 접근하거나 열 이름 사용)
+# URL이 C열에 있다고 하셨으므로 df.iloc[:, 2] 또는 df['url']
+results = []
+for index, row in df.iterrows():
+    url = row.iloc[2] # C열
+    print(f"Checking: {url}")
+    status = check_status(url)
+    results.append(status)
+    print(f"Result: {status}")
 
-# --- [UI 및 실행 루프] ---
-st.set_page_config(page_title="Trenbe Anti-Timeout Checker", layout="wide")
-st.title("🚶‍♂️ 트렌비 정밀 판독 (타임아웃 방어 모드)")
+# 3. D열에 결과 저장
+df['Status'] = results # 혹은 df.insert(3, 'Status', results)
 
-uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv"])
+# 결과 저장
+df.to_csv('products_result.csv', index=False, encoding='utf-8-sig')
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-    
-    if st.button("분석 시작"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        driver = get_driver()
-        total = len(df)
-        
-        for idx in range(total):
-            url = str(df.iloc[idx, 2])
-            platform = str(df.iloc[idx, 13]).lower()
-            
-            if 'trenbe' in platform:
-                result = check_trenbe_with_retry(url, driver, idx)
-                
-                # [복구 로직] TimeoutException이 발생하면 브라우저를 껐다 켜서 세션 초기화
-                if "TimeoutException" in result or "WebDriverException" in result:
-                    status_text.text(f"⚠️ {idx+1}번에서 타임아웃 발생! 브라우저 재시작 중...")
-                    driver.quit()
-                    time.sleep(5)
-                    driver = get_driver()
-                    # 재시작 후 해당 행 다시 시도
-                    result = check_trenbe_with_retry(url, driver, idx)
-
-                df.iloc[idx, 3] = result
-            
-            progress_bar.progress((idx + 1) / total)
-            status_text.text(f" 진행 중: {idx+1}/{total} | 결과: {result}")
-
-        if driver: driver.quit()
-        st.success("✅ 분석 완료!")
-        st.download_button("📥 결과 다운로드", df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'), "final_result.csv", "text/csv")
+driver.quit()
+print("작업 완료!")
