@@ -11,14 +11,20 @@ from webdriver_manager.chrome import ChromeDriverManager
 # --- 1. 셀레니움 드라이버 설정 ---
 def get_driver():
     options = Options()
-    options.add_argument("--headless")  # 서버 환경 필수
+    options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    # 트렌비의 봇 탐지를 우회하기 위한 User-Agent 설정
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # 설치된 chromium-driver의 경로를 직접 지정 (Streamlit Cloud 표준 경로)
+    service = Service("/usr/bin/chromedriver") 
+    
+    try:
+        return webdriver.Chrome(service=service, options=options)
+    except:
+        # 위 경로가 안 될 경우를 대비한 자동 설정 백업
+        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
 # --- 2. 상태 판별 함수 ---
 def check_trenbe_status(driver, url):
