@@ -1,87 +1,109 @@
 import streamlit as st
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 import time
+import random
 import re
-import cv2
-import numpy as np
-import os
-import io
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# 앱 설정
-st.set_page_config(page_title="트렌비 정밀 판별기", page_icon="🛍️")
-st.title("🛍️ 트렌비 상태 판별기 (정밀 모드)")
+# --- [정밀 로직] 타임아웃 방어 및 재시도 ---
+def check_trenbe_with_retry(url, driver, idx):
+    try:
+        match = re.search(r'\d+', str(url))
+        if not match: return "Invalid URL"
+        product_id = match.group()
+        
+        # 사람처럼 랜덤하게 쉬기 (요청 간격 불규칙화)
+        time.sleep(random.uniform(3.0, 5.0))
+        
+        search_url = f"https://www.trenbe.com/search?keyword={product_id}"
+        driver.get(search_url)
+        
+        # [핵심] 타임아웃 발생 시 'Expired' 대신 에러를 던져 브라우저 재시작 유도
+        wait = WebDriverWait(driver, 15) # 대기 시간을 15초로 늘림
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "main")))
+        
+        # 1. '결과 없음' 문구 우선 확인
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        if any(kw in page_text for kw in ["검색 결과가 없습니다", "결과가 없습니다", "검색 결과 0"]):
+            return "Expired"
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-icon_path = os.path.join(current_dir, 'no_product_icon.png')
+        # 2. 메인 컨테이너 내 상품 ID 정밀 대조
+        main_content = driver.find_element(By.TAG_NAME, "main")
+        items = main_content.find_elements(By.CSS_SELECTOR, "a[href*='/product/']")
+        
+        found = any(f"/product/{product_id}" in (item.get_attribute('href') or "") for item in items)
+        
+        return "Active" if found else "Expired"
+        
+    except Exception as e:
+        # 타임아웃 등 에러 발생 시 로그 반환
+        return f"Error: {type(e).__name__}"
 
-uploaded_file = st.file_uploader("list.csv 또는 list.xlsx 업로드", type=["csv", "xlsx"])
-
-@st.cache_resource
+# --- [Selenium 설정] ---
 def get_driver():
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-def check_status_precise(url, template_img):
-    if not url or 'trenbe.com' not in str(url):
-        return "-"
-    try:
-        driver = get_driver()
-        product_id = re.search(r'\d+', str(url)).group()
-        search_url = f"https://www.trenbe.com/search?keyword={product_id}"
-        driver.get(search_url)
-        
-        # 1. 충분한 대기 시간 (로딩이 느릴 경우 대비)
-        time.sleep(6) 
-
-        # 2. 텍스트 기반 1차 검사 (이미지 인식 보완)
-        page_source = driver.page_source
-        if "검색 결과가 없습니다" in page_source or "해당 상품이 없습니다" in page_source:
-            return "Expired"
-
-        # 3. 이미지 기반 2차 검사 (보라색 상자 아이콘 찾기)
-        nparr = np.frombuffer(driver.get_screenshot_as_png(), np.uint8)
-        screen = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        res = cv2.matchTemplate(screen, template_img, cv2.TM_CCOEFF_NORMED)
-        
-        # 일치율을 0.7로 살짝 낮춰서 더 잘 잡히게 설정
-        threshold = 0.7 
-        if len(np.where(res >= threshold)[0]) > 0:
-            return "Expired"
-            
-        return "Active"
-    except:
-        return "Error"
-
-# 실행부 (기존과 동일하되 함수명만 교체)
-if uploaded_file:
-    if not os.path.exists(icon_path):
-        st.error("아이콘 파일(no_product_icon.png)이 없습니다.")
+    options.add_argument("window-size=1920x1080")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # 이미지 차단 (네트워크 부하 감소)
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    options.add_experimental_option("prefs", prefs)
+    
+    import os
+    if os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
+        service = Service("/usr/bin/chromedriver")
     else:
-        template_img = cv2.imread(icon_path, cv2.IMREAD_COLOR)
-        if st.button("정밀 검사 시작"):
-            # 파일 읽기 로직... (이전 코드와 동일)
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-            else:
-                df = pd.read_excel(uploaded_file)
+        service = Service(ChromeDriverManager().install())
+        
+    return webdriver.Chrome(service=service, options=options)
+
+# --- [UI 및 실행 루프] ---
+st.set_page_config(page_title="Trenbe Anti-Timeout Checker", layout="wide")
+st.title("🚶‍♂️ 트렌비 정밀 판독 (타임아웃 방어 모드)")
+
+uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv"])
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+    
+    if st.button("분석 시작"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        driver = get_driver()
+        total = len(df)
+        
+        for idx in range(total):
+            url = str(df.iloc[idx, 2])
+            platform = str(df.iloc[idx, 13]).lower()
             
-            results = []
-            progress_bar = st.progress(0)
-            for i, row in df.iterrows():
-                status = check_status_precise(row.iloc[2], template_img)
-                results.append(status)
-                progress_bar.progress((i + 1) / len(df))
+            if 'trenbe' in platform:
+                result = check_trenbe_with_retry(url, driver, idx)
+                
+                # [복구 로직] TimeoutException이 발생하면 브라우저를 껐다 켜서 세션 초기화
+                if "TimeoutException" in result or "WebDriverException" in result:
+                    status_text.text(f"⚠️ {idx+1}번에서 타임아웃 발생! 브라우저 재시작 중...")
+                    driver.quit()
+                    time.sleep(5)
+                    driver = get_driver()
+                    # 재시작 후 해당 행 다시 시도
+                    result = check_trenbe_with_retry(url, driver, idx)
+
+                df.iloc[idx, 3] = result
             
-            df.iloc[:, 3] = results
-            st.success("검사 완료!")
-            st.download_button("결과 다운로드", df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'), "result.csv")
+            progress_bar.progress((idx + 1) / total)
+            status_text.text(f" 진행 중: {idx+1}/{total} | 결과: {result}")
+
+        if driver: driver.quit()
+        st.success("✅ 분석 완료!")
+        st.download_button("📥 결과 다운로드", df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'), "final_result.csv", "text/csv")
