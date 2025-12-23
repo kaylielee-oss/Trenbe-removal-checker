@@ -3,123 +3,115 @@ import pandas as pd
 import requests
 import time
 import re
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 
-# --- [로직] 트렌비 검증 (Selenium + ID 정밀 대조 방식) ---
-def check_trenbe_status(url, driver):
+# --- [디버깅 도구: 스크린샷 저장] ---
+def save_error_screenshot(driver, name):
+    if driver:
+        if not os.path.exists("debug_pics"):
+            os.makedirs("debug_pics")
+        driver.save_screenshot(f"debug_pics/{name}.png")
+
+# --- [로직 2] 트렌비 검증 (디버깅 강화 버전) ---
+def check_trenbe_status(url, driver, idx):
     try:
-        # 1. URL에서 상품 ID 추출
         match = re.search(r'\d+', str(url))
         if not match: return "Invalid URL"
         product_id = match.group()
         
-        # 2. 검색 페이지 접속
         search_url = f"https://www.trenbe.com/search?keyword={product_id}"
+        st.write(f"🔍 {idx+1}번 상품({product_id}) 검색 시도 중...")
+        
         driver.get(search_url)
-        time.sleep(4) # 동적 컨텐츠 로딩 대기
+        time.sleep(5) # 충분히 대기
 
-        # 3. '검색 결과 없음' 문구 체크
         page_source = driver.page_source
+        
+        # '검색 결과 없음' 문구 체크
         no_result_keywords = ['검색 결과가 없습니다', '검색결과가 없습니다', '결과가 없습니다']
         if any(keyword in page_source for keyword in no_result_keywords):
             return "Expired"
 
-        # 4. 정밀 검증: 검색된 상품 리스트 중 내 상품 ID가 포함된 링크가 있는지 확인
         items = driver.find_elements(By.CSS_SELECTOR, "a[href*='/product/']")
         is_exact_match = any(product_id in (item.get_attribute('href') or "") for item in items)
 
         if is_exact_match:
             return "Active"
         else:
-            return "Expired" # 추천 상품만 뜨고 내 상품은 없는 경우
-    except:
+            # 예상과 다를 때 스크린샷 저장
+            save_error_screenshot(driver, f"check_{idx}_{product_id}")
+            return "Expired"
+    except Exception as e:
+        st.error(f"❌ {idx+1}번에서 에러 발생: {str(e)}")
+        save_error_screenshot(driver, f"error_{idx}")
         return "Error"
 
-# --- [Selenium 설정] Streamlit Cloud 환경용 ---
+# --- [Selenium 설정] ---
 def get_driver():
     options = Options()
-    options.add_argument("--headless")  # 서버에서는 반드시 headless여야 합니다.
+    options.add_argument("--headless") # 서버용
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
     options.add_argument("window-size=1920x1080")
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
     
-    # 서버 차단 방지를 위한 User-Agent 설정
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-    # [중요] Streamlit Cloud 서버의 크롬 실행 파일 경로를 직접 지정합니다.
-    options.binary_location = "/usr/bin/chromium"
-
-    try:
-        # 서버 환경 (Linux)
+    # 서버/로컬 겸용 경로 설정
+    if os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
         service = Service("/usr/bin/chromedriver")
-        driver = webdriver.Chrome(service=service, options=options)
-    except:
-        # 로컬 환경 테스트용 (Windows/Mac)
+    else:
         service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
         
-    return driver
+    return webdriver.Chrome(service=service, options=options)
 
 # --- [UI 구성] ---
-st.set_page_config(page_title="Trenbe URL Checker", layout="wide")
-st.title("📌 트렌비 상품 상태 확인 도구")
-st.info("C열(URL)을 읽어 분석한 뒤, 결과를 D열에 기록합니다. (대상: Trenbe)")
+st.set_page_config(page_title="Debug Mode Checker", layout="wide")
+st.title("📌 트렌비 상태 확인 (디버깅 모드)")
+st.info("진행 과정이 아래에 텍스트로 자세히 표시됩니다.")
 
-uploaded_file = st.file_uploader("분석할 CSV 파일을 업로드하세요", type=["csv"])
+uploaded_file = st.file_uploader("CSV 파일 업로드", type=["csv"])
 
 if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-    except:
-        df = pd.read_csv(uploaded_file, encoding='cp949')
+    df = pd.read_csv(uploaded_file, encoding='utf-8-sig') if 'utf' in str(uploaded_file) else pd.read_csv(uploaded_file, encoding='cp949')
 
-    if st.button("분석 시작"):
+    if st.button("디버깅 분석 시작"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # 드라이버 초기화
         driver = None
-        platforms = df.iloc[:, 13].astype(str).str.lower().values
-        
-        if any('trenbe' in p for p in platforms):
-            with st.spinner("브라우저를 초기화 중입니다..."):
-                driver = get_driver()
-        
+        try:
+            st.write("🛠 브라우저를 켜고 있습니다...")
+            driver = get_driver()
+            st.write("✅ 브라우저 준비 완료!")
+            
             total = len(df)
             for idx in range(total):
-                url = str(df.iloc[idx, 2])          # C열
-                platform = str(df.iloc[idx, 13]).lower() # N열
+                url = str(df.iloc[idx, 2])
+                platform = str(df.iloc[idx, 13]).lower()
                 
-                result = "Skipped"
                 if 'trenbe' in platform:
-                    result = check_trenbe_status(url, driver)
+                    result = check_trenbe_status(url, driver, idx)
+                    df.iloc[idx, 3] = result
                 
-                # D열(인덱스 3)에 결과 기록
-                df.iloc[idx, 3] = result
-                
-                # 진행 상태 업데이트
                 progress = (idx + 1) / total
                 progress_bar.progress(progress)
-                status_text.text(f"진행 중: {idx+1}/{total} (결과: {result})")
+                status_text.text(f"현재 위치: {idx+1}/{total} | 결과: {result}")
+                
+        except Exception as top_e:
+            st.error(f"🚨 치명적 오류 발생: {top_e}")
+        finally:
+            if driver:
+                driver.quit()
+                st.write("🚪 브라우저를 닫았습니다.")
+        
+        st.success("분석 종료!")
+        st.dataframe(df.head(20))
 
-            if driver: driver.quit()
-            
-            st.success("분석 완료!")
-            st.write("### 결과 미리보기 (상위 10개)")
-            st.dataframe(df.head(10))
-            
-            # 다운로드 버튼
-            csv_data = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-            st.download_button(
-                label="결과 파일(.csv) 다운로드",
-                data=csv_data,
-                file_name="trenbe_check_result.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("데이터의 N열에서 'trenbe' 플랫폼을 찾을 수 없습니다.")
+        # 결과 저장
+        csv_data = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button("📥 최종 결과(.csv) 다운로드", csv_data, "debug_result.csv", "text/csv")
