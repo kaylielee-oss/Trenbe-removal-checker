@@ -74,4 +74,52 @@ st.info("C열(URL)을 읽어 분석한 뒤, 결과를 D열에 기록합니다. (
 uploaded_file = st.file_uploader("분석할 CSV 파일을 업로드하세요", type=["csv"])
 
 if uploaded_file is not None:
-    try
+    try:
+        df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+    except:
+        df = pd.read_csv(uploaded_file, encoding='cp949')
+
+    if st.button("분석 시작"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # 트렌비 대상이 있을 경우에만 드라이버 초기화
+        driver = None
+        platforms = df.iloc[:, 13].astype(str).str.lower().values
+        if any('trenbe' in p for p in platforms):
+            with st.spinner("브라우저를 초기화 중입니다..."):
+                driver = get_driver()
+        
+        total = len(df)
+        for idx in range(total):
+            url = df.iloc[idx, 2]       # C열
+            platform = str(df.iloc[idx, 13]).lower() # N열
+            
+            result = "Skipped"
+            if 'pinterest' in platform:
+                result = check_pinterest_status(url)
+            elif 'trenbe' in platform:
+                result = check_trenbe_status(url, driver)
+            
+            # D열(인덱스 3)에 결과 기록
+            df.iloc[idx, 3] = result
+            
+            # 진행 상태 업데이트
+            progress = (idx + 1) / total
+            progress_bar.progress(progress)
+            status_text.text(f"진행 중: {idx+1}/{total} (플랫폼: {platform} | 결과: {result})")
+
+        if driver: driver.quit()
+        
+        st.success("분석 완료!")
+        st.write("### 결과 미리보기 (상위 10개)")
+        st.dataframe(df.head(10))
+        
+        # 다운로드 버튼
+        csv_data = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button(
+            label="결과 파일(.csv) 다운로드",
+            data=csv_data,
+            file_name="url_check_result.csv",
+            mime="text/csv"
+        )
