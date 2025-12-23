@@ -1,7 +1,5 @@
 streamlit
 pandas
+requests
 selenium
-opencv-python-headless
 webdriver-manager
-openpyxl
-numpy
