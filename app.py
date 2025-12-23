@@ -42,10 +42,16 @@ def check_trenbe_status(url, driver):
 # --- [Selenium 설정] Streamlit Cloud 환경용 ---
 def get_driver():
     options = Options()
-    options.add_argument("--headless")
+    
+    # 이 줄을 주석 처리하면 브라우저 창이 실제로 뜹니다!
+    # options.add_argument("--headless") 
+    
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("window-size=1920x1080")
+    
+    # 나머지 설정은 동일...
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     # 로그를 줄여서 깔끔하게 표시
     options.add_experimental_option("excludeSwitches", ["enable-logging"])
     
