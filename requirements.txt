@@ -2,4 +2,3 @@ streamlit
 pandas
 selenium
 webdriver-manager
-requests
