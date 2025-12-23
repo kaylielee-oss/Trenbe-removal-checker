@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import re
 import time
@@ -7,74 +8,98 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
-# 1. 셀레니움 설정 (브라우저 창을 띄우지 않는 headless 모드)
-chrome_options = Options()
-# chrome_options.add_argument("--headless") 
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
+# --- 1. 셀레니움 드라이버 설정 ---
+def get_driver():
+    options = Options()
+    options.add_argument("--headless")  # 서버 환경 필수
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    # 트렌비의 봇 탐지를 우회하기 위한 User-Agent 설정
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-
-def check_status(url):
+# --- 2. 상태 판별 함수 ---
+def check_trenbe_status(driver, url):
     try:
-        # URL에서 상품 코드 추출 (숫자 부분)
-        product_code = re.findall(r'\d+', url)[0]
-        
-        # 방법 A: 상품 상세 페이지 접속 후 버튼 상태 확인
-        driver.get(url)
-        time.sleep(2) # 페이지 로딩 대기
-        
-        try:
-            # '바로 구매하기' 버튼 텍스트 확인
-            # 트렌비는 품절 시 버튼 내부에 '품절' 텍스트가 포함되거나 클래스명이 변경됨
-            buy_button = driver.find_element(By.XPATH, "//button[contains(text(), '구매하기')]")
-            if "품절" in buy_button.text:
-                return "Expired"
-        except:
-            pass # 버튼을 못 찾은 경우 검색 페이지로 2차 검증
+        # URL에서 상품 코드 추출
+        product_code_match = re.search(r'(\d+)', url)
+        if not product_code_match:
+            return "Invalid URL"
+        product_code = product_code_match.group(1)
 
-        # 방법 B: 검색 결과 페이지 확인 (제공해주신 1, 3번 이미지 로직)
+        # [단계 1] 상품 상세 페이지 접속 확인
+        driver.get(url)
+        time.sleep(2)  # 로딩 대기
+
+        # 페이지 소스에 '품절'이 있거나 버튼이 비활성화인지 확인
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+        is_sold_out = False
+        has_buy_button = False
+
+        for btn in buttons:
+            if "바로 구매하기" in btn.text:
+                has_buy_button = True
+                # 버튼 속성에 disabled가 있거나 텍스트에 품절이 포함된 경우
+                if btn.get_attribute("disabled") or "품절" in btn.text:
+                    is_sold_out = True
+            elif "품절" in btn.text:
+                is_sold_out = True
+
+        if has_buy_button and not is_sold_out:
+            return "Active"
+
+        # [단계 2] 상세 페이지에서 판별이 모호할 경우 검색 결과 확인
         search_url = f"https://www.trenbe.com/search/?keyword={product_code}"
         driver.get(search_url)
         time.sleep(2)
 
-        page_source = driver.page_source
-        
-        # "해당 상품이 없습니다" 문구가 있거나 보라색 상자 아이콘(특정 클래스)이 있는 경우
-        if "해당 상품이 없습니다" in page_source:
+        page_text = driver.page_source
+        if "해당 상품이 없습니다" in page_text:
             return "Expired"
         
-        # 상품 리스트가 존재하고, 검색한 상품 코드가 결과에 보이면 Active
-        # (3번째 사진처럼 상품이 하나라도 뜨면 Active로 간주)
-        product_list = driver.find_elements(By.CSS_SELECTOR, "div[class*='ProductItem']") # 실제 클래스명 확인 필요
-        if len(product_list) > 0:
+        # 검색 결과 리스트 확인 (상품 아이템 클래스 추출 시도)
+        items = driver.find_elements(By.CSS_SELECTOR, "div[class*='ProductItem']")
+        if len(items) > 0:
             return "Active"
-        
-        return "Expired" # 기본값
+
+        return "Expired"
 
     except Exception as e:
-        print(f"Error checking {url}: {e}")
-        return "Error"
+        return f"Error: {str(e)}"
 
-# 2. CSV 파일 불러오기 및 처리
-input_file = 'products.csv'  # 파일 경로를 수정하세요
-df = pd.read_csv(input_file)
+# --- 3. 스트림릿 UI ---
+st.title("🛍️ 트렌비 상품 상태 체크 도구")
+st.write("C열에 URL이 있는 CSV 파일을 업로드하면 D열에 상태를 추가해 드립니다.")
 
-# C열(url) 데이터를 읽어서 처리 (인덱스로 접근하거나 열 이름 사용)
-# URL이 C열에 있다고 하셨으므로 df.iloc[:, 2] 또는 df['url']
-results = []
-for index, row in df.iterrows():
-    url = row.iloc[2] # C열
-    print(f"Checking: {url}")
-    status = check_status(url)
-    results.append(status)
-    print(f"Result: {status}")
+uploaded_file = st.file_uploader("CSV 파일을 업로드하세요", type=['csv'])
 
-# 3. D열에 결과 저장
-df['Status'] = results # 혹은 df.insert(3, 'Status', results)
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.write("파일 일부 미리보기:", df.head())
 
-# 결과 저장
-df.to_csv('products_result.csv', index=False, encoding='utf-8-sig')
+    if st.button("검사 시작"):
+        driver = get_driver()
+        results = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-driver.quit()
-print("작업 완료!")
+        for i, url in enumerate(df.iloc[:, 2]):  # C열 (인덱스 2)
+            status_text.text(f"검사 중 ({i+1}/{len(df)}): {url}")
+            status = check_trenbe_status(driver, url)
+            results.append(status)
+            progress_bar.progress((i + 1) / len(df))
+
+        driver.quit()
+
+        # D열(인덱스 3)에 결과 추가
+        df['Status (Active/Expired)'] = results
+        
+        st.success("검사 완료!")
+        st.write(df.head())
+
+        # 다운로드 버튼
+        csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+        st.download_button("결과 파일 다운로드", csv, "trenbe_results.csv", "text/csv")
