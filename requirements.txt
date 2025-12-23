@@ -1,0 +1,7 @@
+streamlit
+pandas
+selenium
+opencv-python-headless
+webdriver-manager
+openpyxl
+numpy
