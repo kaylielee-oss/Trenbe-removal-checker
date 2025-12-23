@@ -45,19 +45,17 @@ def check_trenbe_with_retry(url, driver, idx):
         # 타임아웃 등 에러 발생 시 로그 반환
         return f"Error: {type(e).__name__}"
 
-# --- [Selenium 설정] ---
 def get_driver():
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("window-size=1920x1080")
+    # 봇 감지 우회 핵심 설정
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
-    # 이미지 차단 (네트워크 부하 감소)
-    prefs = {"profile.managed_default_content_settings.images": 2}
-    options.add_experimental_option("prefs", prefs)
-    
+
     import os
     if os.path.exists("/usr/bin/chromium"):
         options.binary_location = "/usr/bin/chromium"
@@ -65,7 +63,11 @@ def get_driver():
     else:
         service = Service(ChromeDriverManager().install())
         
-    return webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    # [핵심 스크립트] 웹드라이버 속성을 제거하여 봇 감지를 회피함
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
 # --- [UI 및 실행 루프] ---
 st.set_page_config(page_title="Trenbe Anti-Timeout Checker", layout="wide")
