@@ -56,11 +56,17 @@ def get_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     
-    # 시스템에 설치된 크롬 사용 유도
+    # 설치된 크롬 실행 파일 경로 명시
+    options.binary_location = "/usr/bin/chromium"
+
     try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    except:
-        driver = webdriver.Chrome(options=options)
+        # webdriver_manager를 사용하지 않고 시스템에 설치된 드라이버 직접 연결
+        service = Service("/usr/bin/chromedriver")
+        driver = webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        # 실패 시 자동 설치 시도
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
     return driver
 
 # --- [UI 구성] ---
