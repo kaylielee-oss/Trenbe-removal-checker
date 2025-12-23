@@ -43,24 +43,24 @@ def check_trenbe_status(url, driver):
 def get_driver():
     options = Options()
     
-    # 이 줄을 주석 처리하면 브라우저 창이 실제로 뜹니다!
+    # 1. [체크] 로컬에서 창을 보려면 아래 줄을 반드시 주석 처리(#) 하세요
     # options.add_argument("--headless") 
     
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("window-size=1920x1080")
     
-    # 나머지 설정은 동일...
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    # 로그를 줄여서 깔끔하게 표시
-    options.add_experimental_option("excludeSwitches", ["enable-logging"])
-    
-    # Streamlit Cloud 환경 대응 경로 설정
-    options.binary_location = "/usr/bin/chromium"
-    try:
-        return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
-    except:
-        return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # 2. [중요] 로컬 테스트 시에는 아래 binary_location 줄을 삭제하거나 주석 처리해야 합니다.
+    # options.binary_location = "/usr/bin/chromium" 
+
+    # 3. 브라우저가 자동화임을 인식하지 못하게 하는 설정 (차단 방지)
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    # 4. 드라이버 실행
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
 
 # --- [UI 구성] ---
 st.set_page_config(page_title="Trenbe URL Checker", layout="wide")
