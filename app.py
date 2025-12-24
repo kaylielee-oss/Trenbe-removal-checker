@@ -27,9 +27,16 @@ def get_driver():
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    
+    # Streamlit Cloud 환경에서 크롬 경로 자동 설정
+    # 아래 코드는 서버에 설치된 크롬을 직접 가리킵니다.
+    options.binary_location = "/usr/bin/chromium"
+    
+    # Service 설정 시 경로를 직접 지정하지 않아도 시스템에 설치된 것을 사용하게 함
+    return webdriver.Chrome(options=options)
 
 def check_status_final(url):
     if not url or not isinstance(url, str): return "-"
