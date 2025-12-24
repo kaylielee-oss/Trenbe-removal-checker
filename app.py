@@ -1,3 +1,11 @@
+# Trenbe 폴더 안에 실제 파일명이랑 똑같이 적어주세요
+EXPIRED_IMAGES = [
+    'no_product_icon.png',    # 트렌비 검색없음 아이콘
+    '11st_no_product.png',   # 11번가 검색없음 아이콘
+    'stop_popup_trenbe.png', # 트렌비 판매중지 문구 캡처
+    'stop_popup_11st.png'    # 11번가 판매중지 문구 캡처
+]
+
 import streamlit as st
 import pandas as pd
 from selenium import webdriver
