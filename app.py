@@ -1,11 +1,3 @@
-# Trenbe 폴더 안에 실제 파일명이랑 똑같이 적어주세요
-EXPIRED_IMAGES = [
-    'no_product_icon.png',    # 트렌비 검색없음 아이콘
-    '11st_no_product.png',   # 11번가 검색없음 아이콘
-    'stop_popup_trenbe.png', # 트렌비 판매중지 문구 캡처
-    'stop_popup_11st.png'    # 11번가 판매중지 문구 캡처
-]
-
 import streamlit as st
 import pandas as pd
 from selenium import webdriver
@@ -23,12 +15,11 @@ import io
 # 앱 설정
 st.set_page_config(page_title="트렌비/11번가 정밀 판별기", page_icon="🔍")
 st.title("🛍️ 통합 상품 상태 판별기")
-st.write("이미지 조각 매칭 + 가격 데이터 검증으로 오판율을 최소화합니다.")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 검사할 이미지 조각들 (Trenbe 폴더 안에 해당 파일들이 있어야 함)
-EXPIRED_IMAGES = ['no_product_icon.png', '11st_no_product.png', 'stop_popup.png']
+# 1. 이미지 파일명 리스트 확인 (폴더 내 파일명과 정확히 일치해야 함)
+EXPIRED_IMAGES = ['no_product_icon.png', '11st_no_product.png']
 
 @st.cache_resource
 def get_driver():
@@ -41,33 +32,39 @@ def get_driver():
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
 def check_status_final(url):
-    if not url: return "-"
+    if not url or not isinstance(url, str): return "-"
     driver = get_driver()
     
     try:
-        # --- 1단계: 상세 페이지 직접 접속 및 '가격' 확인 ---
+        # --- 1단계: 상세 페이지 접속 검사 (팝업 문구 체크) ---
         driver.get(url)
-        time.sleep(5) # 충분한 로딩 대기
+        time.sleep(4) 
         
-        # 트렌비 전용 가격 태그 확인 (가격이 있으면 일단 Active 가능성 높음)
-        if 'trenbe.com' in url:
-            prices = driver.find_elements(By.CLASS_NAME, "PriceWithTag__Price")
-            if len(prices) > 0 and prices[0].text.strip() != "":
-                # 가격이 존재하면 일단 Active로 간주하되, 팝업이 있는지 한번 더 체크
-                page_text = driver.find_element(By.TAG_NAME, "body").text
-                if "판매 중지" in page_text or "삭제된 상품" in page_text:
-                    return "Expired"
-                return "Active"
+        # 페이지 전체 텍스트에서 '판매중지' 관련 키워드 검색
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        stop_keywords = ["판매 중지", "삭제된 상품", "판매 종료", "존재하지 않는", "현재 판매하지 않는"]
+        if any(word in page_text for word in stop_keywords):
+            return "Expired"
 
-        # --- 2단계: 이미지 조각 매칭 (검색 결과 페이지 등) ---
-        # 11번가나 트렌비 검색 결과 확인이 필요한 경우
-        product_id_match = re.search(r'\d+', str(url))
-        if product_id_match:
-            product_id = product_id_match.group()
-            search_url = f"https://www.trenbe.com/search?keyword={product_id}" if 'trenbe' in url else f"https://www.11st.co.kr/search?kwd={product_id}"
+        # --- 2단계: 사이트별 검색 결과 이미지 매칭 ---
+        search_url = ""
+        # 11번가: products/ 뒤의 숫자 추출
+        if '11st.co.kr' in url:
+            match = re.search(r'products/(\d+)', url)
+            if match:
+                search_url = f"https://www.11st.co.kr/search?kwd={match.group(1)}"
+        # 트렌비: URL 내의 모든 숫자 조합 중 가장 긴 것 추출
+        elif 'trenbe.com' in url:
+            nums = re.findall(r'\d+', url)
+            if nums:
+                product_id = max(nums, key=len)
+                search_url = f"https://www.trenbe.com/search?keyword={product_id}"
+
+        if search_url:
             driver.get(search_url)
             time.sleep(4)
-
+            
+            # 스크린샷 캡처
             nparr = np.frombuffer(driver.get_screenshot_as_png(), np.uint8)
             screen = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -75,15 +72,39 @@ def check_status_final(url):
                 img_path = os.path.join(current_dir, img_name)
                 if os.path.exists(img_path):
                     template = cv2.imread(img_path, cv2.IMREAD_COLOR)
+                    if template is None: continue
+                    
                     res = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
-                    if len(np.where(res >= 0.8)[0]) > 0: # 일치율 80%
+                    # 일치율을 0.8로 설정 (너무 안 잡히면 0.7로 낮추세요)
+                    if len(np.where(res >= 0.8)[0]) > 0:
                         return "Expired"
         
         return "Active"
-    except:
-        return "Error"
+    except Exception as e:
+        return f"Error"
 
-# (이하 실행 및 엑셀 업로드 로직은 이전과 동일)
-uploaded_file = st.file_uploader("list.csv 또는 list.xlsx 업로드", type=["csv", "xlsx"])
+# --- 엑셀 처리 로직 ---
+uploaded_file = st.file_uploader("검사할 파일을 올려주세요", type=["csv", "xlsx"])
+
 if uploaded_file and st.button("정밀 분석 시작"):
-    # ... (데이터 처리 및 결과 다운로드 버튼 코드)
+    if uploaded_file.name.endswith('.csv'):
+        try: df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+        except: df = pd.read_csv(uploaded_file, encoding='cp949')
+    else:
+        df = pd.read_excel(uploaded_file)
+
+    progress_bar = st.progress(0)
+    results = []
+    
+    for i, row in df.iterrows():
+        url = row.iloc[2] # C열
+        status = check_status_final(url)
+        results.append(status)
+        progress_bar.progress((i + 1) / len(df))
+    
+    df.iloc[:, 3] = results # D열에 저장
+    st.success("🎉 검사 완료!")
+    
+    # 다운로드 버튼
+    csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+    st.download_button("📥 결과 다운로드", csv, "result.csv", "text/csv")
